@@ -256,11 +256,12 @@ function adjoint!(y::GraphNode{:maxpool2x2,1})
         block = x.data[2i-1:2i, 2j-1:2j, c]
         max_val = maximum(block)
 
-        # Add gradient where the max value is
+        added = false
         for bi in 1:2
           for bj in 1:2
-            if block[bi, bj] == max_val
+            if !added && block[bi, bj] == max_val
               x.grad[2i-2+bi, 2j-2+bj, c] += y.grad[i, j, c]
+              added = true
             end
           end
         end
@@ -321,7 +322,7 @@ function primal!(y::GraphNode{:conv2d,3})
 
   # Naiwna implementacja pętlami
   fill!(y.data, 0.0)
-  for c_o in 1:C_out
+  Threads.@threads for c_o in 1:C_out
     for c_i in 1:C_in
       for i in 1:out_W
         for j in 1:out_H
@@ -357,7 +358,7 @@ function adjoint!(y::GraphNode{:conv2d,3})
   out_W, out_H, _ = size(y.data)
 
   # Przechodzenie grafu w tył przy naiwnej konwolucji
-  for c_o in 1:C_out
+  Threads.@threads for c_o in 1:C_out
     for c_i in 1:C_in
       for i in 1:out_W
         for j in 1:out_H
