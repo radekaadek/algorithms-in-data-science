@@ -61,11 +61,17 @@ end
 # BCE
 function primal!(z::GraphNode{:bce,2})
   x, y = z.args
-  z.data = -(y.data .* log.(x.data) + (1 .- y.data) .* log.(1 .- x.data))
+  ϵ = 1e-8 # Tiny epsilon to prevent exploding math
+  x_safe = clamp.(x.data, ϵ, 1.0 - ϵ)
+
+  z.data = -(y.data .* log.(x_safe) .+ (1.0 .- y.data) .* log.(1.0 .- x_safe))
 end
 function adjoint!(z::GraphNode{:bce,2})
   x, y = z.args
-  x.grad .-= (y.data ./ x.data .- (1 .- y.data) ./ (1 .- x.data)) .* z.grad
+  ϵ = 1e-8
+  x_safe = clamp.(x.data, ϵ, 1.0 - ϵ)
+
+  x.grad .-= (y.data ./ x_safe .- (1.0 .- y.data) ./ (1.0 .- x_safe)) .* z.grad
 end
 
 # Matrix Multiply
@@ -105,7 +111,7 @@ function primal!(y::GraphNode{:sigmoid,1})
   x, = y.args
   y.data .= 1 ./ (1 .+ exp.(-x.data))
 end
-function adjoint!(y::GraphNode{:sigmoid, 1})
-    x, = y.args
-    x.grad .+= (y.data .* (1 .- y.data)) .* y.grad
+function adjoint!(y::GraphNode{:sigmoid,1})
+  x, = y.args
+  x.grad .+= (y.data .* (1 .- y.data)) .* y.grad
 end
