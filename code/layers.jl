@@ -1,18 +1,27 @@
-# layers.jl
 include("autodiff.jl")
+
+global IS_TRAINING = true
 
 abstract type Operator end
 const Chain = Vector{Operator}
 
 struct Sigmoid <: Operator end
 struct ReLU <: Operator end
+struct MaxPool <: Operator end
+struct Flatten <: Operator end
 struct Dense <: Operator
   insize::Int64
   outsize::Int64
 end
+struct Dropout <: Operator
+  p::Float64
+end
 
 relu() = ReLU()
 sigmoid() = Sigmoid()
+maxpool() = MaxPool()
+flatten() = Flatten()
+dropout(p::Float64) = Dropout(p)
 dense(pair::Pair{Int64,Int64}) = Dense(first(pair), last(pair))
 dense(pair::Pair{Int64,Int64}, activation) = tuple(dense(pair), activation())
 
@@ -68,6 +77,35 @@ function (y::Dense)(x)
   # 4. Connect to the graph
   mul = GraphNode(:mul, (W, x), zeros(y.outsize))
   return GraphNode(:add, (mul, b), zeros(y.outsize))
+end
+
+function (y::Dropout)(x)
+  # Create helper nodes for the mask and probability
+  # inside the graph, so that adjoint! can access them
+  mask = GraphNode(zeros(size(x.data)))
+  p_node = GraphNode([y.p])
+  
+  return GraphNode(:dropout, (x, mask, p_node), zeros(size(x.data)))
+end
+
+function (y::MaxPool)(x)
+  W, H, C = size(x.data)
+  out_W, out_H = div(W, 2), div(H, 2)
+  return GraphNode(:maxpool2x2, (x,), zeros(out_W, out_H, C))
+end
+
+function (y::Flatten)(x)
+  return GraphNode(:flatten, (x,), zeros(length(x.data)))
+end
+
+function primal!(y::GraphNode{:flatten,1})
+  x, = y.args
+  y.data .= vec(x.data)
+end
+
+function adjoint!(y::GraphNode{:flatten,1})
+  x, = y.args
+  x.grad .+= reshape(y.grad, size(x.data)) # Bring gradient back to original shape
 end
 
 # BCE
@@ -126,4 +164,71 @@ end
 function adjoint!(y::GraphNode{:sigmoid,1})
   x, = y.args
   x.grad .+= (y.data .* (1 .- y.data)) .* y.grad
+end
+
+# MaxPool
+function primal!(y::GraphNode{:maxpool2x2,1})
+  x, = y.args
+  W, H, C = size(x.data)
+
+  for c in 1:C
+    for i in 1:div(W, 2)
+      for j in 1:div(H, 2)
+        # Get max value in block
+        block = x.data[2i-1:2i, 2j-1:2j, c]
+        y.data[i, j, c] = maximum(block)
+      end
+    end
+  end
+end
+function adjoint!(y::GraphNode{:maxpool2x2,1})
+  x, = y.args
+  W, H, C = size(x.data)
+
+  for c in 1:C
+    for i in 1:div(W, 2)
+      for j in 1:div(H, 2)
+        block = x.data[2i-1:2i, 2j-1:2j, c]
+        max_val = maximum(block)
+
+        # Add gradient where the max value is
+        for bi in 1:2
+          for bj in 1:2
+            if block[bi, bj] == max_val
+              x.grad[2i-2+bi, 2j-2+bj, c] += y.grad[i, j, c]
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+# Dropout
+function primal!(y::GraphNode{:dropout,3})
+  x, mask, p_node = y.args
+  p = p_node.data[1]
+  global IS_TRAINING
+  
+  if IS_TRAINING
+    mask.data .= rand(size(x.data)...) .> p
+    
+    y.data .= (x.data .* mask.data) ./ (1.0 - p)
+  else
+    y.data .= x.data
+  end
+end
+function adjoint!(y::GraphNode{:dropout,3})
+  x, mask, p_node = y.args
+  p = p_node.data[1]
+  global IS_TRAINING
+  
+  if IS_TRAINING
+    # Gradient only flows through "active" neurons,
+    x.grad .+= (y.grad .* mask.data) ./ (1.0 - p)
+  else
+    # Even though we are not training, 
+    # the gradient flows through normally
+    x.grad .+= y.grad
+  end
 end
