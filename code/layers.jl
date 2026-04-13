@@ -52,8 +52,20 @@ end
 (y::ReLU)(x) = GraphNode(:relu, (x,), zeros(length(x.data)))
 
 function (y::Dense)(x)
-  W = GraphNode(randn(y.outsize, y.insize), true)
-  b = GraphNode(randn(y.outsize), true)
+  # 1. Calculate the Glorot Uniform limit
+  # limit = sqrt(6 / (fan_in + fan_out))
+  limit = sqrt(6.0 / (y.insize + y.outsize))
+
+  # 2. Initialize W with Glorot Uniform
+  # rand(out, in) generates U(0, 1). 
+  # We scale it to (0, 2*limit) and shift by -limit to get U(-limit, limit).
+  W_init = (rand(y.outsize, y.insize) .* (2.0 * limit)) .- limit
+  W = GraphNode(W_init, true)
+
+  # 3. Initialize b to 0
+  b = GraphNode(zeros(y.outsize), true)
+
+  # 4. Connect to the graph
   mul = GraphNode(:mul, (W, x), zeros(y.outsize))
   return GraphNode(:add, (mul, b), zeros(y.outsize))
 end

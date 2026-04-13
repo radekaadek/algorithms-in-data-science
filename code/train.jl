@@ -7,8 +7,7 @@ test_data  = MLDatasets.FashionMNIST(split=:test)
 
 # Network Setup
 net = chain((
-    dense(784 => 16, relu),
-    dense(16 => 10, sigmoid),
+    dense(784 => 10, sigmoid),
 ))
 
 input  = tensor(784)()
@@ -22,6 +21,7 @@ function prep_data(data)
     N = length(data.targets)
     # Flatten the 28x28 images into 784xN vectors
     xs = reshape(data.features, 784, N)
+    xs = xs ./ 255.0
     
     # One-hot encode the 10 classes
     ys = zeros(10, N)
@@ -83,9 +83,9 @@ println("[x] Random model on test data:")
 test(model, test_inputs, test_targets, input, output)
 
 println("\n[x] Training...")
-total_epochs = 100
+total_epochs = 1000
 for i in 1:total_epochs
-    L = train!(model, batch, inputs, targets, input, target, learning_rate=1e-2, epoch=i, total_epochs=total_epochs)
+    L = train!(model, batch, inputs, targets, input, target, learning_rate=0.4, epoch=i, total_epochs=total_epochs)
     # Print the loss clearly underneath the completed progress bar
     println("↳ End of Epoch $i - Loss: ", round(L, digits=4), "\n")
 end
