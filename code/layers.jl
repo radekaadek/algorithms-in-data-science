@@ -1,3 +1,5 @@
+using FFTW
+
 include("autodiff.jl")
 
 global IS_TRAINING = true
@@ -298,7 +300,41 @@ function adjoint!(y::GraphNode{:dropout,3})
     x.grad .+= y.grad
   end
 end
-# Forward pass (przebieg w przód) dla naiwnego splotu
+
+# Author: Seif_Shebl
+# URL: https://discourse.julialang.org/t/what-is-julias-im2col/14066/9
+@inline function im2col(A, n, m)
+    M, N = size(A)
+    B = Array{eltype(A)}(undef, m*n, (M-m+1)*(N-n+1))
+    indx = reshape(1:M*N, M, N)[1:M-m+1, 1:N-n+1]
+    for (i, value) in enumerate(indx)
+        for j = 0:n-1
+            @views B[(i-1)*m*n+j*m+1:(i-1)*m*n+(j+1)*m] = A[value+j*M:value+m-1+j*M]
+        end
+    end
+    return B
+end
+
+@inline function col2im(B, M, N, n, m)
+    A = zeros(eltype(B), M, N)
+    indx = reshape(1:M*N, M, N)[1:M-m+1, 1:N-n+1]
+    for (i, value) in enumerate(indx)
+        for j = 0:n-1
+            @views A[value+j*M:value+m-1+j*M] .+= B[(i-1)*m*n+j*m+1:(i-1)*m*n+(j+1)*m]
+        end
+    end
+    return A
+end
+
+function fftconv(img::Matrix, kernel::Matrix)
+    ker = zero(img)
+    ker[1:3, 1:3] .= kernel
+    I, K = fft(img), fft(ker)
+    J = ifft(I .* K)
+    return abs.(J)
+end
+
+# Convolution
 function primal!(y::GraphNode{:conv2d,3})
   x, W, pad_node = y.args
   img = x.data
@@ -308,7 +344,7 @@ function primal!(y::GraphNode{:conv2d,3})
   img_W, img_H, C_in = size(img)
   kW, kH, _, C_out = size(ker)
 
-  # Obsługa brzegu (Zero-padding)
+  # Padding
   if pad > 0
     padded_img = zeros(img_W + 2pad, img_H + 2pad, C_in)
     padded_img[pad+1:pad+img_W, pad+1:pad+img_H, :] = img
@@ -318,24 +354,23 @@ function primal!(y::GraphNode{:conv2d,3})
 
   out_W, out_H, _ = size(y.data)
 
-  fill!(y.data, 0.0)
+  # Reshape kernel for matrix multiplication: (C_out, kW * kH * C_in)
+  ker_reshaped = reshape(ker, kW * kH * C_in, C_out)'
 
-  # Naiwna implementacja pętlami
-  fill!(y.data, 0.0)
-  Threads.@threads for c_o in 1:C_out
-    for c_i in 1:C_in
-      for i in 1:out_W
-        for j in 1:out_H
-          # Dodane @views
-          @views block = padded_img[i:i+kW-1, j:j+kH-1, c_i]
-          @views y.data[i, j, c_o] += sum(block .* ker[:, :, c_i, c_o])
-        end
-      end
-    end
+  # Apply im2col to each channel and stack into columns: (kW * kH * C_in, out_W * out_H)
+  col_img = zeros(eltype(img), kW * kH * C_in, out_W * out_H)
+  for c in 1:C_in
+      col_img[(c-1)*kW*kH + 1 : c*kW*kH, :] = im2col(padded_img[:, :, c], kW, kH)
+  end
+
+  # The magic happens here: a single Matrix Multiplication!
+  out_col = ker_reshaped * col_img
+
+  # Reshape the output back to (out_W, out_H, C_out)
+  for c_o in 1:C_out
+      y.data[:, :, c_o] = reshape(out_col[c_o, :], out_W, out_H)
   end
 end
-
-# Backward pass (przebieg w tył - propagacja wsteczna gradientu) dla naiwnego splotu
 function adjoint!(y::GraphNode{:conv2d,3})
   x, W, pad_node = y.args
   img = x.data
@@ -344,41 +379,46 @@ function adjoint!(y::GraphNode{:conv2d,3})
 
   img_W, img_H, C_in = size(img)
   kW, kH, _, C_out = size(ker)
+  out_W, out_H, _ = size(y.data)
 
-  # Przygotowanie struktur na wejście uwzględniających padding
+  # Padding setup
   if pad > 0
     padded_img = zeros(img_W + 2pad, img_H + 2pad, C_in)
     padded_img[pad+1:pad+img_W, pad+1:pad+img_H, :] = img
-    padded_grad = zeros(img_W + 2pad, img_H + 2pad, C_in)
   else
     padded_img = img
-    padded_grad = zeros(size(img))
   end
 
-  out_W, out_H, _ = size(y.data)
-
-  # Przechodzenie grafu w tył przy naiwnej konwolucji
-  Threads.@threads for c_o in 1:C_out
-    for c_i in 1:C_in
-      for i in 1:out_W
-        for j in 1:out_H
-          dy = y.grad[i, j, c_o]
-
-          # Dodane @views dla bloków obrazu, gradientu i jadra
-          @views block = padded_img[i:i+kW-1, j:j+kH-1, c_i]
-          @views w_grad_view = W.grad[:, :, c_i, c_o]
-          @views p_grad_view = padded_grad[i:i+kW-1, j:j+kH-1, c_i]
-          @views ker_view = ker[:, :, c_i, c_o]
-
-          # Mnożenie w miejscu bez tworzenia nowych tablic (Broadcast)
-          w_grad_view .+= block .* dy
-          p_grad_view .+= ker_view .* dy
-        end
-      end
-    end
+  # Flatten dy: (C_out, out_W * out_H)
+  dy_reshaped = zeros(eltype(y.grad), C_out, out_W * out_H)
+  for c_o in 1:C_out
+      dy_reshaped[c_o, :] = vec(y.grad[:, :, c_o])
   end
 
-  # Odrzucamy padding z obliczonego gradientu wejściowego
+  # Reconstruct col_img for kernel gradient: (kW * kH * C_in, out_W * out_H)
+  col_img = zeros(eltype(img), kW * kH * C_in, out_W * out_H)
+  for c in 1:C_in
+      col_img[(c-1)*kW*kH + 1 : c*kW*kH, :] = im2col(padded_img[:, :, c], kW, kH)
+  end
+
+  # 1. Gradient with respect to Kernel (W)
+  # dW = dy * X^T
+  dW_reshaped = dy_reshaped * col_img'
+  W.grad .+= reshape(dW_reshaped', kW, kH, C_in, C_out)
+
+  # 2. Gradient with respect to Input (X)
+  # dX_col = W^T * dy
+  ker_reshaped = reshape(ker, kW * kH * C_in, C_out)'
+  dx_col = ker_reshaped' * dy_reshaped
+
+  # Reconstruct the padded gradient image using col2im
+  padded_grad = zeros(eltype(img), size(padded_img)...)
+  for c in 1:C_in
+      padded_grad[:, :, c] = col2im(dx_col[(c-1)*kW*kH + 1 : c*kW*kH, :], 
+                                    img_W + 2pad, img_H + 2pad, kW, kH)
+  end
+
+  # Remove padding before adding to x.grad
   if pad > 0
     x.grad .+= padded_grad[pad+1:pad+img_W, pad+1:pad+img_H, :]
   else

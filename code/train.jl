@@ -1,5 +1,5 @@
 include("layers.jl")
-using MLDatasets, Random, ProgressMeter, CairoMakie
+using MLDatasets, Random, ProgressMeter, CairoMakie, Profile, ProfileView, StatProfilerHTML
 
 train_data = MLDatasets.FashionMNIST(split=:train)
 test_data = MLDatasets.FashionMNIST(split=:test)
@@ -116,7 +116,7 @@ println("[x] Random model on full test data:")
 init_acc = test(model, test_inputs, test_targets, input, output, desc="Testing Init: ")
 println("Accuracy: ", round(init_acc, digits=2), "%\n")
 
-println("[x] Training on full dataset (60,000 samples) with batchsize $(settings.batchsize)...")
+println("[x] Training...")
 accuracy = zeros(settings.epochs, 2)
 
 for epoch in 1:settings.epochs
