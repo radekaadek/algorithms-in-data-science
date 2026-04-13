@@ -6,16 +6,20 @@ test_data = MLDatasets.FashionMNIST(split=:test)
 
 # Network Setup
 net = chain((
+  Conv((3, 3), 1 => 6, pad=1, bias=false),
+  maxpool(),
+  Conv((3, 3), 6 => 16, pad=1, bias=false),
+  maxpool(),
   flatten(),
   dense(784 => 84, relu),
   dropout(0.4),
-  dense(84 => 10, sigmoid),
+  dense(84 => 10, softmax),
 ))
 
-input = tensor(784)()
+input = tensor(28, 28, 1)()
 target = tensor(10)()
 output = net(input)
-loss = bce(output, target)
+loss = cce(output, target)
 model = graph(loss)
 
 # Helpers
@@ -23,7 +27,6 @@ function prep_data(data)
   N = length(data.targets)
   # Flatten the 28x28 images into 784xN vectors
   xs = reshape(data.features, 784, N)
-  xs = xs ./ 255.0
 
   # One-hot encode the 10 classes
   ys = zeros(10, N)
@@ -31,7 +34,7 @@ function prep_data(data)
     ys[data.targets[i]+1, i] = 1.0
   end
 
-  # Cast to Float64 to ensure compatibility with your custom layers
+  # Cast to Float64 to ensure compatibility
   return Float64.(xs), Float64.(ys)
 end
 
@@ -40,7 +43,7 @@ function test(model, inputs, targets, input_node, output_node)
   correct = 0
   N = size(inputs, 2)
   for i in 1:N
-    forward!(model, input_node => inputs[:, i])
+    forward!(model, input_node => reshape(inputs[:, i], 28, 28, 1))
 
     # Determine the predicted class and the true class
     pred_class = argmax(output_node.data)
@@ -66,7 +69,7 @@ function train!(model, batch_indices, inputs, targets, input_node, target_node; 
 
   for i in batch_indices
     zerograd!(model)
-    forward!(model, input_node => inputs[:, i], target_node => targets[:, i])
+    forward!(model, input_node => reshape(inputs[:, i], 28, 28, 1), target_node => targets[:, i])
     backward!(model)
     L += sum(model[end].data)
     optimize!(model, learning_rate)
@@ -82,17 +85,20 @@ test_inputs, test_targets = prep_data(test_data)
 
 # Taking a 500-sample batch for training
 batch = collect(1:500)
+learning_rate = 1e-2
+total_epochs = 3
 
 println("[x] Random model on test data:")
-test(model, test_inputs, test_targets, input, output)
+# test(model, test_inputs, test_targets, input, output)
+test(model, test_inputs[:, 501:1000], test_targets[:, 501:1000], input, output)
 
 println("\n[x] Training...")
-total_epochs = 1000
 for i in 1:total_epochs
-  L = train!(model, batch, inputs, targets, input, target, learning_rate=1e-2, epoch=i, total_epochs=total_epochs)
+  L = train!(model, batch, inputs, targets, input, target, learning_rate=learning_rate, epoch=i, total_epochs=total_epochs)
   # Print the loss clearly underneath the completed progress bar
   println("↳ End of Epoch $i - Loss: ", round(L, digits=4), "\n")
 end
 
 println("\n[x] Final model on test data:")
-test(model, test_inputs, test_targets, input, output)
+# test(model, test_inputs, test_targets, input, output)
+test(model, test_inputs[:, 501:1000], test_targets[:, 501:1000], input, output)
