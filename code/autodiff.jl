@@ -23,17 +23,18 @@ function GraphNode(op::Symbol, args::Tuple, data::T) where T
   return GraphNode{op,N}(args, grad, data)
 end
 
-function graph(node)
-  function visit!(node::GraphNode, visited, ordered)
-    if !(node in visited)
-      push!(visited, node)
-      for arg in node.args
-        visit!(arg, visited, ordered)
-      end
-      push!(ordered, node)
+function visit!(node::GraphNode, visited, ordered)
+  if !(node in visited)
+    push!(visited, node)
+    for arg in node.args
+      visit!(arg, visited, ordered)
     end
-    return nothing
+    push!(ordered, node)
   end
+  return nothing
+end
+
+function graph(node)
   ordered = Vector{GraphNode}()
   visited = Set{GraphNode}()
   visit!(node, visited, ordered)

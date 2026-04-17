@@ -4,24 +4,6 @@ using MLDatasets, Random, ProgressMeter, CairoMakie, Profile, ProfileView, StatP
 train_data = MLDatasets.FashionMNIST(split=:train)
 test_data = MLDatasets.FashionMNIST(split=:test)
 
-# Network Setup
-net = chain((
-  Conv((3, 3), 1 => 6, pad=1, bias=false),
-  maxpool(),
-  Conv((3, 3), 6 => 16, pad=1, bias=false),
-  maxpool(),
-  flatten(),
-  dense(784 => 84, relu),
-  dropout(0.4),
-  dense(84 => 10, softmax),
-))
-
-input = tensor(28, 28, 1)()
-target = tensor(10)()
-output = net(input)
-loss = cce(output, target)
-model = graph(loss)
-
 # Helpers
 function prep_data(data)
   N = length(data.targets)
@@ -98,6 +80,23 @@ function train!(model, all_indices, inputs, targets, input_node, target_node; le
   return L / length(all_indices)
 end
 
+net = chain((
+  Conv((3, 3), 1 => 6, pad=1, bias=false),
+  maxpool(),
+  Conv((3, 3), 6 => 16, pad=1, bias=false),
+  maxpool(),
+  flatten(),
+  dense(784 => 84, relu),
+  dropout(0.4),
+  dense(84 => 10, softmax),
+))
+
+input = tensor(28, 28, 1)()
+target = tensor(10)()
+output = net(input)
+loss = cce(output, target)
+model = graph(loss)
+
 # Execution
 inputs, targets = prep_data(train_data)
 test_inputs, test_targets = prep_data(test_data)
@@ -105,8 +104,7 @@ test_inputs, test_targets = prep_data(test_data)
 all_train_indices = collect(1:size(inputs, 2))
 all_test_indices = collect(1:size(test_inputs, 2))
 
-# Use the same parameters defined in notebook.jl
-settings = (;
+settings = (
   eta=1e-2,
   epochs=3,
   batchsize=10,

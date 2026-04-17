@@ -1,5 +1,3 @@
-using FFTW
-
 include("autodiff.jl")
 
 global IS_TRAINING = true
@@ -49,15 +47,12 @@ struct Tensor{N}
 end
 tensor(sz...) = Tensor(sz)
 
-function chain(operators)
-  function flatten(x::Tuple)
-    y = Vector{Operator}()
-    for v in x
-      v isa Tuple ? append!(y, v) : push!(y, v)
-    end
-    return y
+function chain(x::Tuple)
+  y = Vector{Operator}()
+  for v in x
+    v isa Tuple ? append!(y, v) : push!(y, v)
   end
-  return flatten(operators)
+  return y
 end
 
 function (chain::Chain)(x)
@@ -150,7 +145,7 @@ function primal!(z::GraphNode{:bce,2})
   ϵ = 1e-8 # Tiny epsilon to prevent exploding math
   x_safe = clamp.(x.data, ϵ, 1.0 - ϵ)
 
-  z.data = -(y.data .* log.(x_safe) .+ (1.0 .- y.data) .* log.(1.0 .- x_safe))
+  z.data .= -(y.data .* log.(x_safe) .+ (1.0 .- y.data) .* log.(1.0 .- x_safe))
 end
 function adjoint!(z::GraphNode{:bce,2})
   x, y = z.args
@@ -167,8 +162,8 @@ function primal!(y::GraphNode{:mul,2})
 end
 function adjoint!(y::GraphNode{:mul,2})
   W, x = y.args
-  W.grad += y.grad * x.data'
-  x.grad += W.data' * y.grad
+  W.grad .+= y.grad * x.data'
+  x.grad .+= W.data' * y.grad
 end
 
 # ReLU
@@ -197,7 +192,7 @@ end
 # Addition
 function primal!(z::GraphNode{:add,2})
   x, y = z.args
-  z.data = x.data .+ y.data
+  z.data .= x.data .+ y.data
 end
 function adjoint!(z::GraphNode{:add,2})
   x, y = z.args
@@ -295,7 +290,7 @@ function adjoint!(y::GraphNode{:dropout,3})
     # Gradient only flows through "active" neurons,
     x.grad .+= (y.grad .* mask.data) ./ (1.0 - p)
   else
-    # Even though we are not training, 
+    # Even though we are not training in adjoint!,
     # the gradient flows through normally
     x.grad .+= y.grad
   end
@@ -324,14 +319,6 @@ end
         end
     end
     return A
-end
-
-function fftconv(img::Matrix, kernel::Matrix)
-    ker = zero(img)
-    ker[1:3, 1:3] .= kernel
-    I, K = fft(img), fft(ker)
-    J = ifft(I .* K)
-    return abs.(J)
 end
 
 # Convolution
@@ -363,12 +350,12 @@ function primal!(y::GraphNode{:conv2d,3})
       col_img[(c-1)*kW*kH + 1 : c*kW*kH, :] = im2col(padded_img[:, :, c], kW, kH)
   end
 
-  # The magic happens here: a single Matrix Multiplication!
+  # A single Matrix Multiplication!
   out_col = ker_reshaped * col_img
 
   # Reshape the output back to (out_W, out_H, C_out)
   for c_o in 1:C_out
-      y.data[:, :, c_o] = reshape(out_col[c_o, :], out_W, out_H)
+      y.data[:, :, c_o] .= reshape(out_col[c_o, :], out_W, out_H)
   end
 end
 function adjoint!(y::GraphNode{:conv2d,3})
@@ -384,7 +371,7 @@ function adjoint!(y::GraphNode{:conv2d,3})
   # Padding setup
   if pad > 0
     padded_img = zeros(img_W + 2pad, img_H + 2pad, C_in)
-    padded_img[pad+1:pad+img_W, pad+1:pad+img_H, :] = img
+    padded_img[pad+1:pad+img_W, pad+1:pad+img_H, :] .= img
   else
     padded_img = img
   end
@@ -398,7 +385,7 @@ function adjoint!(y::GraphNode{:conv2d,3})
   # Reconstruct col_img for kernel gradient: (kW * kH * C_in, out_W * out_H)
   col_img = zeros(eltype(img), kW * kH * C_in, out_W * out_H)
   for c in 1:C_in
-      col_img[(c-1)*kW*kH + 1 : c*kW*kH, :] = im2col(padded_img[:, :, c], kW, kH)
+      col_img[(c-1)*kW*kH + 1 : c*kW*kH, :] .= im2col(padded_img[:, :, c], kW, kH)
   end
 
   # 1. Gradient with respect to Kernel (W)
